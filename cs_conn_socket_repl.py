@@ -71,6 +71,8 @@ class ConnectionSocketRepl(cs_conn.Connection):
         if column is not None:
             msg += f', :column {column}'
         if file is not None:
+            # windows path support
+            file = file.replace('\\', '\\\\')
             msg += f', :file "{file}"'
         msg += f"}}"
         self.send(msg)
