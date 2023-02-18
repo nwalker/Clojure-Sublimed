@@ -1,7 +1,9 @@
 (ns clojure-sublimed.socket-repl
   (:require
     [clojure.string :as str]
-    [clojure-sublimed.exception :as exception]))
+    [clojure-sublimed.exception :as exception])
+  (:import
+    [System.IO StringReader]))
 
 (def ^:dynamic *out-fn*
   prn)
@@ -15,6 +17,10 @@
 (defn stop! []
   (throw (ex-info "Stop" {::stop true})))
 
+(defn debug> [x]
+  (tap> x)
+  x)
+
 (defn read-command [in]
   (let [[form s] (read+string {:eof ::eof, :read-cond :allow} in)]
     (when (= ::eof form)
@@ -27,13 +33,13 @@
     
     form))
 
-(defn report-throwable [^Throwable t]
-  (let [root  ^Throwable (exception/root-cause t)
+(defn report-throwable [^Exception t]
+  (let [root  ^Exception (exception/root-cause t)
         {:clojure.error/keys [source line column]} (ex-data root)
-        cause ^Throwable (or (some-> root .getCause) root)
+        cause ^Exception (or (some-> root .InnerException) root)
         data  (ex-data cause)
-        class (.getSimpleName (class cause))
-        msg   (.getMessage cause)
+        class (.Name (class cause))
+        msg   (.Message cause)
         val   (cond-> (str class ": " msg)
                 data
                 (str " " (exception/bounded-pr-str data)))
@@ -49,11 +55,12 @@
         @*context*))))
 
 (defn reader [code line column]
-  (let [reader (clojure.lang.LineNumberingPushbackReader. (java.io.StringReader. code))]
+  (let [reader (clojure.lang.LineNumberingTextReader. (StringReader. code))]
     (when line
-      (.setLineNumber reader (int line)))
-    (when column
-      (when-some [field (->> clojure.lang.LineNumberingPushbackReader
+      (.set_LineNumber reader (int line)))
+    ; TODO: reimplement
+    #_(when column
+      (when-some [field (->> clojure.lang.LineNumberingTextReader
                           (.getDeclaredFields)
                           (filter #(= "_columnNumber" (.getName ^java.lang.reflect.Field %)))
                           first)]
@@ -66,7 +73,7 @@
   (let [{:keys [id op code ns line column file]} form
         ; code' (binding [*read-eval* false]
         ;         (read-string {:read-cond :preserve} code))
-        start  (System/nanoTime)
+        start  (clojure.lang.RT/StartStopwatch)
         ns     (or ns 'user)
         ns-obj (or
                  (find-ns ns)
@@ -77,10 +84,8 @@
         ; ret   (eval `(do (in-ns '~(or ns 'user)) ~code'))
         ret    (binding [*read-eval* false
                          *ns*        ns-obj]
-                 (clojure.lang.Compiler/load (reader code line column) file name))
-        time   (-> (System/nanoTime)
-                 (- start)
-                 (quot 1000000))]
+                 (clojure.lang.Compiler/load (reader code line column) file name nil))
+        time   (clojure.lang.RT/StopStopwatch)]
     (*out-fn*
       {:tag  :ret
        :id   id
@@ -91,10 +96,10 @@
   (let [f (future
             (try
               (eval-code form)
-              (catch Throwable t
+              (catch Exception t
                 (try
                   (report-throwable t)
-                  (catch Throwable t
+                  (catch Exception t
                     :ignore))))
             (swap! *evals dissoc id))]
     (swap! *evals assoc id f)))
@@ -157,10 +162,11 @@
                 :lookup    (lookup-symbol form)
                 (throw (Exception. (str "Unknown op: " (:op form)))))
               true)
-            (catch Throwable t
+            (catch Exception t
               (when-not (-> t ex-data ::stop)
                 (report-throwable t)
                 true))))
         (recur)))
     (doseq [[id f] @*evals]
       (future-cancel f))))
+
